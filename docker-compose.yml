@@ -1,0 +1,274 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────
+#  TRINETRA – Production Event-Driven Stack
+#  Broker: Kafka  |  Buffer: Redis  |  VectorDB: Qdrant
+#  Observability: Prometheus + Grafana
+# ─────────────────────────────────────────────
+
+x-common-env: &common-env
+  TZ: "Asia/Kolkata"
+  LOG_LEVEL: "INFO"
+
+networks:
+  trinetra_net:
+    driver: bridge
+
+volumes:
+  redis_data:
+  kafka_data:
+  zookeeper_data:
+  qdrant_data:
+  prometheus_data:
+  grafana_data:
+
+services:
+
+  # ─── 1. REDIS (Frame Ingestion Buffer) ─────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    container_name: trinetra_redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory 2gb
+      --maxmemory-policy allkeys-lru
+      --save 60 1000
+      --loglevel warning
+      --requirepass ${REDIS_PASSWORD:-trinetra_redis_secret}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - trinetra_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-trinetra_redis_secret}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── 2. ZOOKEEPER (Kafka dependency) ───────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: trinetra_zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+    networks:
+      - trinetra_net
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── 3. KAFKA (Cross-Service Event Backbone) ────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: trinetra_kafka
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"       # Internal broker
+      - "29092:29092"     # External access (dev/debug)
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_LOG_RETENTION_HOURS: 24
+      KAFKA_LOG_SEGMENT_BYTES: 104857600         # 100MB segments
+      KAFKA_LOG_RETENTION_BYTES: 1073741824      # 1GB max per topic
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_NUM_PARTITIONS: 8                    # Match number of cameras
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - trinetra_net
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ─── Kafka Topic Initializer (one-shot) ─────────────────────────────────────
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: trinetra_kafka_init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command: |
+      "
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic trinetra.detections --partitions 8 --replication-factor 1
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic trinetra.identities --partitions 4 --replication-factor 1
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic trinetra.alerts   --partitions 2 --replication-factor 1
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic trinetra.analytics --partitions 2 --replication-factor 1
+      echo 'Kafka topics created.'
+      "
+    networks:
+      - trinetra_net
+    restart: on-failure
+
+  # ─── 4. QDRANT (Vector Similarity Search for Re-ID) ─────────────────────────
+  qdrant:
+    image: qdrant/qdrant:v1.9.0
+    container_name: trinetra_qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"   # HTTP REST
+      - "6334:6334"   # gRPC
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-trinetra_qdrant_secret}
+      QDRANT__LOG_LEVEL: INFO
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - trinetra_net
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:6333/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── 5. PROMETHEUS (Metrics Scraping) ────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: trinetra_prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - trinetra_net
+    depends_on:
+      - stream-ingestor
+      - inference-worker
+      - identity-resolver
+
+  # ─── 6. GRAFANA (Dashboards) ─────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: trinetra_grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-trinetra_grafana}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/trinetra.json
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning/:/etc/grafana/provisioning/:ro
+      - ./grafana/dashboards/:/var/lib/grafana/dashboards/:ro
+    networks:
+      - trinetra_net
+    depends_on:
+      - prometheus
+
+  # ─── 7. STREAM INGESTOR ──────────────────────────────────────────────────────
+  stream-ingestor:
+    build:
+      context: ./services/stream_ingestor
+      dockerfile: Dockerfile
+    container_name: trinetra_stream_ingestor
+    restart: unless-stopped
+    <<: *common-env
+    environment:
+      REDIS_URL: "redis://:${REDIS_PASSWORD:-trinetra_redis_secret}@redis:6379"
+      FRAME_BUFFER_MAXLEN: "100"          # Frames per camera before tail-drop
+      TARGET_FPS: "15"                    # Inference-rate FPS (not capture FPS)
+      CAMERA_CONFIGS: "/etc/trinetra/cameras.yaml"
+      METRICS_PORT: "8001"
+    ports:
+      - "8001:8001"   # Prometheus metrics
+      - "8000:8000"   # FastAPI health / management
+    volumes:
+      - ${CAMERA_CONFIG_PATH:-./config/cameras.yaml}:/etc/trinetra/cameras.yaml:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - trinetra_net
+
+  # ─── 8. INFERENCE WORKER ─────────────────────────────────────────────────────
+  inference-worker:
+    build:
+      context: ./services/inference_worker
+      dockerfile: Dockerfile
+    container_name: trinetra_inference_worker
+    restart: unless-stopped
+    environment:
+      REDIS_URL: "redis://:${REDIS_PASSWORD:-trinetra_redis_secret}@redis:6379"
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+      YOLO_ENGINE_PATH: "/models/yolov8m.engine"
+      ARCFACE_ENGINE_PATH: "/models/arcface_r50.engine"
+      BATCH_SIZE: "4"
+      BATCH_TIMEOUT_MS: "20"
+      METRICS_PORT: "8002"
+    ports:
+      - "8002:8002"
+    volumes:
+      - ${MODEL_PATH:-./models}:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    networks:
+      - trinetra_net
+
+  # ─── 9. IDENTITY RESOLVER ────────────────────────────────────────────────────
+  identity-resolver:
+    build:
+      context: ./services/identity_resolver
+      dockerfile: Dockerfile
+    container_name: trinetra_identity_resolver
+    restart: unless-stopped
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+      KAFKA_CONSUMER_GROUP: "identity-resolver-group"
+      QDRANT_URL: "http://qdrant:6333"
+      QDRANT_API_KEY: "${QDRANT_API_KEY:-trinetra_qdrant_secret}"
+      QDRANT_COLLECTION: "face_embeddings"
+      COSINE_THRESHOLD: "0.72"
+      TEMPORAL_GATE_WINDOW_S: "30"
+      METRICS_PORT: "8003"
+    ports:
+      - "8003:8003"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    networks:
+      - trinetra_net

@@ -1,0 +1,33 @@
+# cameras.yaml — Camera feed configuration
+# Add/remove entries to register cameras with the stream ingestor.
+
+cameras:
+  - id: "cam_entrance_01"
+    type: "entrance"
+    rtsp_url: "rtsp://192.168.1.101:554/stream1"
+    resolution: [1920, 1080]
+    target_fps: 15
+
+  - id: "cam_face_01"
+    type: "face_capture"
+    rtsp_url: "rtsp://192.168.1.102:554/stream1"
+    resolution: [1280, 720]
+    target_fps: 15
+
+  - id: "cam_tracking_01"
+    type: "tracking"
+    rtsp_url: "rtsp://192.168.1.103:554/stream1"
+    resolution: [1280, 720]
+    target_fps: 10
+
+  - id: "cam_billing_01"
+    type: "billing"
+    rtsp_url: "rtsp://192.168.1.104:554/stream1"
+    resolution: [1280, 720]
+    target_fps: 15          # Priority queue: billing camera always processed first
+
+  - id: "cam_vehicle_01"
+    type: "vehicle"
+    rtsp_url: "rtsp://192.168.1.105:554/stream1"
+    resolution: [1920, 1080]
+    target_fps: 5           # LPR doesn't need high FPS

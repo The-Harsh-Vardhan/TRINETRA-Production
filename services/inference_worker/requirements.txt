@@ -1,0 +1,7 @@
+redis[hiredis]==5.0.3
+confluent-kafka==2.4.0
+onnxruntime-gpu==1.18.0
+opencv-python-headless==4.9.0.80
+numpy==1.26.4
+pydantic-settings==2.2.1
+prometheus-client==0.20.0
