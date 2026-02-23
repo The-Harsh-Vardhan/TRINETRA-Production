@@ -1,0 +1,67 @@
+name: Model Validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "services/inference_worker/**"
+      - "services/identity_resolver/**"
+      - "scripts/calibrate_reid.py"
+      - "tests/model/**"
+  schedule:
+    - cron: "0 2 * * 1"   # Weekly Monday 02:00 UTC — catch silent drift
+
+jobs:
+  embedding-consistency:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install deps
+        run: pip install numpy pytest onnxruntime opencv-python-headless
+
+      - name: Download pinned test gallery
+        run: |
+          # Download a small synthetic gallery (pre-computed embeddings, no real faces)
+          mkdir -p tests/model/fixtures
+          # In real CI: download from S3 artifact store
+          # aws s3 cp s3://trinetra-models/test-gallery.npz tests/model/fixtures/
+
+      - name: Run embedding consistency tests
+        run: pytest tests/model/test_embedding_consistency.py -v
+
+  threshold-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install deps
+        run: pip install numpy pytest scikit-learn
+
+      - name: Threshold regression check
+        run: pytest tests/model/test_threshold_regression.py -v
+        # Fails if calibrated threshold deviates by > 0.01 from baseline
+
+  drift-detection:
+    runs-on: ubuntu-latest
+    needs: [embedding-consistency, threshold-regression]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install deps
+        run: pip install numpy pytest scipy
+
+      - name: Drift detection check
+        run: pytest tests/model/test_drift_detection.py -v

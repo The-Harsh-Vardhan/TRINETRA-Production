@@ -1,0 +1,214 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference-worker
+  namespace: trinetra
+  labels:
+    app: inference-worker
+    tier: gpu
+spec:
+  replicas: 1          # 1 replica per GPU node; scale by adding GPU nodes
+  selector:
+    matchLabels:
+      app: inference-worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0    # Never take all GPU workers down simultaneously
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: inference-worker
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8002"
+    spec:
+      # Pin to GPU node pool
+      nodeSelector:
+        cloud.google.com/gke-accelerator: nvidia-l4   # Change per cloud provider
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+
+      # Graceful shutdown: allow in-flight batch to complete
+      terminationGracePeriodSeconds: 60
+
+      containers:
+        - name: inference-worker
+          image: ghcr.io/YOUR_ORG/trinetra-inference-worker:latest
+          imagePullPolicy: Always
+
+          ports:
+            - containerPort: 8002
+              name: metrics
+
+          envFrom:
+            - configMapRef:
+                name: trinetra-config
+          env:
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: trinetra-secrets
+                  key: redis-url
+            - name: YOLO_ENGINE_PATH
+              value: "/models/yolov8m.engine"
+            - name: ARCFACE_ENGINE_PATH
+              value: "/models/arcface_r50.engine"
+
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+              nvidia.com/gpu: "1"   # Limit = 1 GPU per pod; cannot exceed
+
+          volumeMounts:
+            - name: model-store
+              mountPath: /models
+              readOnly: true
+            - name: trt-cache
+              mountPath: /tmp/trt_cache
+
+          # Wait for TRT engine load (can take 30-60s on cold start)
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            failureThreshold: 20
+            periodSeconds: 10
+            initialDelaySeconds: 30
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            failureThreshold: 3
+
+      volumes:
+        - name: model-store
+          persistentVolumeClaim:
+            claimName: model-store-pvc
+        - name: trt-cache
+          emptyDir:
+            medium: Memory
+            sizeLimit: 512Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stream-ingestor
+  namespace: trinetra
+  labels:
+    app: stream-ingestor
+    tier: cpu
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: stream-ingestor
+  template:
+    metadata:
+      labels:
+        app: stream-ingestor
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8001"
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: stream-ingestor
+          image: ghcr.io/YOUR_ORG/trinetra-stream-ingestor:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              name: http
+            - containerPort: 8001
+              name: metrics
+          envFrom:
+            - configMapRef:
+                name: trinetra-config
+          env:
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: trinetra-secrets
+                  key: redis-url
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          volumeMounts:
+            - name: camera-config
+              mountPath: /etc/trinetra
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 15
+      volumes:
+        - name: camera-config
+          configMap:
+            name: camera-config
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: identity-resolver
+  namespace: trinetra
+  labels:
+    app: identity-resolver
+    tier: cpu
+spec:
+  replicas: 2          # Auto-scaled by HPA via Kafka consumer lag
+  selector:
+    matchLabels:
+      app: identity-resolver
+  template:
+    metadata:
+      labels:
+        app: identity-resolver
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8003"
+    spec:
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: identity-resolver
+          image: ghcr.io/YOUR_ORG/trinetra-identity-resolver:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8003
+              name: metrics
+          envFrom:
+            - configMapRef:
+                name: trinetra-config
+          env:
+            - name: QDRANT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: trinetra-secrets
+                  key: qdrant-api-key
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8003
+            periodSeconds: 15

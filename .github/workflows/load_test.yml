@@ -1,0 +1,72 @@
+name: Synthetic Load Test
+
+on:
+  schedule:
+    - cron: "0 3 * * 0"   # Weekly Sunday 03:00 UTC
+  workflow_dispatch:
+
+jobs:
+  load-test:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7.2-alpine
+        ports: ["6379:6379"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Locust
+        run: pip install locust redis numpy
+
+      - name: Start mock inference pipeline
+        run: |
+          # Start a stub that reads from Redis and publishes to stdout
+          python tests/load/mock_pipeline.py &
+          sleep 5
+
+      - name: Run Locust load test (headless)
+        run: |
+          locust -f tests/load/locustfile.py \
+            --headless \
+            --users 8 \
+            --spawn-rate 1 \
+            --run-time 600s \
+            --host http://localhost:8000 \
+            --csv=results/load_test \
+            --exit-code-on-error 1 \
+            --html=results/load_test_report.html
+
+      - name: Assert latency SLA
+        run: |
+          python3 - <<'EOF'
+          import csv
+          with open("results/load_test_stats.csv") as f:
+              rows = list(csv.DictReader(f))
+          for row in rows:
+              if row["Name"] == "Aggregated":
+                  p99 = float(row["99%"])
+                  assert p99 < 200, f"P99 latency {p99}ms > 200ms SLA"
+                  drop_rate = float(row.get("Failure Count", 0)) / max(1, float(row["Request Count"]))
+                  assert drop_rate < 0.01, f"Frame drop rate {drop_rate:.2%} > 1%"
+                  print(f"✓ P99={p99}ms, drop_rate={drop_rate:.3%}")
+          EOF
+
+      - name: Upload load test report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: load-test-report-${{ github.run_number }}
+          path: results/
+
+      - name: Notify Slack on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: '{"text":"🚨 TRINETRA load test FAILED on run ${{ github.run_number }}"}'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}

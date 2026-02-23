@@ -1,0 +1,77 @@
+name: Code Quality
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main]
+
+jobs:
+  lint-and-typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dev dependencies
+        run: pip install ruff mypy pydantic pydantic-settings
+
+      - name: Ruff lint
+        run: ruff check services/ tests/ scripts/
+
+      - name: Ruff format check
+        run: ruff format --check services/ tests/ scripts/
+
+      - name: Mypy type check — stream_ingestor
+        run: mypy services/stream_ingestor/ --ignore-missing-imports
+
+      - name: Mypy type check — inference_worker
+        run: mypy services/inference_worker/ --ignore-missing-imports
+
+      - name: Mypy type check — identity_resolver
+        run: mypy services/identity_resolver/ --ignore-missing-imports
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7.2-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install test dependencies
+        run: |
+          pip install pytest pytest-asyncio pytest-cov
+          pip install redis numpy pydantic pydantic-settings
+
+      - name: Run unit tests
+        env:
+          REDIS_URL: redis://localhost:6379
+        run: |
+          pytest tests/unit/ -v \
+            --cov=services \
+            --cov-report=xml \
+            --cov-fail-under=75
+
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v4
+        with:
+          file: coverage.xml

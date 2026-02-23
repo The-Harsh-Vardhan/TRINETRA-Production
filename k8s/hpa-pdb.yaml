@@ -1,0 +1,83 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: identity-resolver-hpa
+  namespace: trinetra
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: identity-resolver
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    # Scale on Kafka consumer lag (requires Prometheus Adapter + custom metric)
+    - type: External
+      external:
+        metric:
+          name: kafka_consumer_group_lag
+          selector:
+            matchLabels:
+              topic: trinetra.detections
+              group: identity-resolver-group
+        target:
+          type: AverageValue
+          averageValue: "500"    # Scale out when lag > 500 messages per replica
+    # Also scale on CPU as fallback
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30   # React quickly to lag spikes
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300  # Be conservative scaling down (avoid flapping)
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: stream-ingestor-hpa
+  namespace: trinetra
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: stream-ingestor
+  minReplicas: 1
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 75
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: inference-worker-pdb
+  namespace: trinetra
+spec:
+  minAvailable: 1   # Always keep at least 1 GPU worker running during node drains
+  selector:
+    matchLabels:
+      app: inference-worker
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: identity-resolver-pdb
+  namespace: trinetra
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: identity-resolver

@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: trinetra
+  labels:
+    app: trinetra
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trinetra-config
+  namespace: trinetra
+data:
+  KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+  QDRANT_URL: "http://qdrant:6333"
+  QDRANT_COLLECTION: "face_embeddings"
+  COSINE_THRESHOLD: "0.72"
+  TEMPORAL_GATE_WINDOW_S: "3600"
+  BATCH_SIZE: "4"
+  BATCH_TIMEOUT_MS: "20"
+  TARGET_FPS: "15"
+  FRAME_BUFFER_MAXLEN: "100"
+  LOG_LEVEL: "INFO"

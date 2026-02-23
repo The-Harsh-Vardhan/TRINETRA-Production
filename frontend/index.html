@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TRINETRA — Analytics Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0a0e1a;
+      --surface: #111827;
+      --surface2: #1a2234;
+      --accent: #6366f1;
+      --accent2: #22d3ee;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --success: #10b981;
+      --text: #e2e8f0;
+      --muted: #64748b;
+      --border: #1e293b;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', system-ui, sans-serif;
+      min-height: 100vh;
+    }
+
+    /* ── Top Bar ── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 24px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+
+    header h1 {
+      font-size: 1.2rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      color: var(--accent2);
+    }
+
+    header h1 span {
+      color: var(--muted);
+      font-weight: 400;
+      font-size: 0.85rem;
+      margin-left: 10px;
+    }
+
+    #status-bar {
+      display: flex;
+      gap: 20px;
+      align-items: center;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        opacity: 1
+      }
+
+      50% {
+        opacity: 0.4
+      }
+    }
+
+    .stat-chip {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 12px;
+      font-size: 0.8rem;
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .stat-chip .val {
+      color: var(--accent2);
+      font-weight: 600;
+    }
+
+    /* ── Layout ── */
+    main {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      grid-template-rows: auto auto auto;
+      gap: 16px;
+      padding: 20px;
+      max-width: 1600px;
+      margin: 0 auto;
+    }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+    }
+
+    .card h2 {
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+
+    /* ── Camera Grid ── */
+    #camera-grid-card {
+      grid-column: 1 / 3;
+    }
+
+    #camera-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+
+    .camera-cell {
+      background: var(--surface2);
+      border-radius: 8px;
+      overflow: hidden;
+      aspect-ratio: 16/9;
+      position: relative;
+      border: 1px solid var(--border);
+    }
+
+    .camera-cell canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .camera-label {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
+      padding: 6px 8px;
+      font-size: 0.7rem;
+      color: #fff;
+    }
+
+    .camera-badge {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      background: var(--success);
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: 0.65rem;
+      font-weight: 600;
+    }
+
+    .camera-badge.warn {
+      background: var(--warn);
+      color: #000;
+    }
+
+    /* ── Alert Feed ── */
+    #alert-card {
+      grid-column: 3 / 4;
+      grid-row: 1 / 3;
+    }
+
+    #alert-feed {
+      height: 380px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .alert-item {
+      background: var(--surface2);
+      border-radius: 8px;
+      padding: 10px 12px;
+      border-left: 3px solid var(--accent);
+      font-size: 0.8rem;
+      animation: slideIn 0.3s ease;
+    }
+
+    .alert-item.high {
+      border-color: var(--danger);
+    }
+
+    .alert-item.medium {
+      border-color: var(--warn);
+    }
+
+    .alert-item .alert-time {
+      color: var(--muted);
+      font-size: 0.7rem;
+    }
+
+    .alert-item .alert-title {
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateY(-4px)
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0)
+      }
+    }
+
+    /* ── Stats Row ── */
+    #stats-row {
+      grid-column: 1 / 4;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 12px;
+    }
+
+    .stat-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      text-align: center;
+    }
+
+    .stat-box .big {
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--accent2);
+      line-height: 1;
+    }
+
+    .stat-box .label {
+      font-size: 0.72rem;
+      color: var(--muted);
+      margin-top: 4px;
+      text-transform: uppercase;
+    }
+
+    .stat-box .trend {
+      font-size: 0.75rem;
+      color: var(--success);
+      margin-top: 2px;
+    }
+
+    /* ── Charts ── */
+    #confidence-card {
+      grid-column: 1 / 2;
+    }
+
+    #latency-card {
+      grid-column: 2 / 3;
+    }
+
+    .chart-wrap {
+      height: 180px;
+      position: relative;
+    }
+
+    /* ── System Health ── */
+    #health-card {
+      grid-column: 3 / 4;
+    }
+
+    .health-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.82rem;
+    }
+
+    .health-row:last-child {
+      border-bottom: none;
+    }
+
+    .health-bar-wrap {
+      width: 100px;
+      height: 6px;
+      background: var(--surface2);
+      border-radius: 3px;
+    }
+
+    .health-bar {
+      height: 100%;
+      border-radius: 3px;
+      background: var(--success);
+      transition: width 0.8s ease;
+    }
+
+    .health-bar.warn {
+      background: var(--warn);
+    }
+
+    .health-bar.danger {
+      background: var(--danger);
+    }
+
+    /* ── Degradation Banner ── */
+    #degradation-banner {
+      display: none;
+      grid-column: 1 / 4;
+      background: #7c2d12;
+      border: 1px solid #c2410c;
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-size: 0.85rem;
+      align-items: center;
+      gap: 10px;
+    }
+
+    #degradation-banner.show {
+      display: flex;
+    }
+  </style>
+</head>
+
+<body>
+
+  <header>
+    <h1>TRINETRA <span>Smart Retail Analytics</span></h1>
+    <div id="status-bar">
+      <div class="stat-chip">
+        <div class="dot"></div><span>Live</span>
+      </div>
+      <div class="stat-chip">GPU <span class="val" id="hdr-gpu">72%</span></div>
+      <div class="stat-chip">Queue <span class="val" id="hdr-queue">34</span></div>
+      <div class="stat-chip">Cameras <span class="val">5/5</span></div>
+      <div class="stat-chip">ReID Rate <span class="val" id="hdr-reid">84%</span></div>
+    </div>
+  </header>
+
+  <main>
+    <!-- Degradation Banner -->
+    <div id="degradation-banner">
+      ⚠️ Live feed temporarily disconnected. Displaying last known data from <span id="last-ts">--</span>. Attempting
+      reconnect...
+    </div>
+
+    <!-- Camera Grid -->
+    <div class="card" id="camera-grid-card">
+      <h2>📷 Camera Feeds</h2>
+      <div id="camera-grid">
+        <div class="camera-cell"><canvas id="cv0"></canvas>
+          <div class="camera-label">Entrance</div>
+          <div class="camera-badge">LIVE</div>
+        </div>
+        <div class="camera-cell"><canvas id="cv1"></canvas>
+          <div class="camera-label">Face Capture</div>
+          <div class="camera-badge">LIVE</div>
+        </div>
+        <div class="camera-cell"><canvas id="cv2"></canvas>
+          <div class="camera-label">Tracking A</div>
+          <div class="camera-badge">LIVE</div>
+        </div>
+        <div class="camera-cell"><canvas id="cv3"></canvas>
+          <div class="camera-label">Billing Counter</div>
+          <div class="camera-badge warn">BUSY</div>
+        </div>
+        <div class="camera-cell"><canvas id="cv4"></canvas>
+          <div class="camera-label">Vehicle Entry</div>
+          <div class="camera-badge">LIVE</div>
+        </div>
+        <div class="camera-cell"
+          style="display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:0.8rem;">
+          + Add Camera
+        </div>
+      </div>
+    </div>
+
+    <!-- Alert Feed -->
+    <div class="card" id="alert-card">
+      <h2>🔔 Alert Feed</h2>
+      <div id="alert-feed"></div>
+    </div>
+
+    <!-- Stats Row -->
+    <div id="stats-row">
+      <div class="stat-box">
+        <div class="big" id="stat-footfall">247</div>
+        <div class="label">Footfall Today</div>
+        <div class="trend">↑ +12 vs yesterday</div>
+      </div>
+      <div class="stat-box">
+        <div class="big" id="stat-active">18</div>
+        <div class="label">Active In-Store</div>
+        <div class="trend" style="color:var(--accent2)">Real-time</div>
+      </div>
+      <div class="stat-box">
+        <div class="big" id="stat-dwell">8.4m</div>
+        <div class="label">Avg Dwell Time</div>
+        <div class="trend">↓ -0.8m vs avg</div>
+      </div>
+      <div class="stat-box">
+        <div class="big" id="stat-vip" style="color:var(--warn)">3</div>
+        <div class="label">VIP Alerts Today</div>
+        <div class="trend">Active monitoring</div>
+      </div>
+      <div class="stat-box">
+        <div class="big" id="stat-reid" style="color:var(--success)">84%</div>
+        <div class="label">Re-ID Match Rate</div>
+        <div class="trend">Threshold: 0.72</div>
+      </div>
+    </div>
+
+    <!-- Confidence Chart -->
+    <div class="card" id="confidence-card">
+      <h2>📊 Re-ID Confidence (Last 60s)</h2>
+      <div class="chart-wrap"><canvas id="confChart"></canvas></div>
+    </div>
+
+    <!-- Latency Chart -->
+    <div class="card" id="latency-card">
+      <h2>⚡ Inference Latency P99 (ms)</h2>
+      <div class="chart-wrap"><canvas id="latChart"></canvas></div>
+    </div>
+
+    <!-- System Health -->
+    <div class="card" id="health-card">
+      <h2>🖥️ System Health</h2>
+      <div class="health-row">GPU Utilization
+        <div>
+          <div class="health-bar-wrap">
+            <div class="health-bar warn" id="bar-gpu" style="width:72%"></div>
+          </div>
+        </div>
+        <span id="lbl-gpu" style="font-size:0.8rem;width:36px;text-align:right">72%</span>
+      </div>
+      <div class="health-row">VRAM Used
+        <div>
+          <div class="health-bar-wrap">
+            <div class="health-bar" id="bar-vram" style="width:31%"></div>
+          </div>
+        </div>
+        <span id="lbl-vram" style="font-size:0.8rem;width:36px;text-align:right">3.1G</span>
+      </div>
+      <div class="health-row">Redis Queue
+        <div>
+          <div class="health-bar-wrap">
+            <div class="health-bar" id="bar-queue" style="width:34%"></div>
+          </div>
+        </div>
+        <span id="lbl-queue" style="font-size:0.8rem;width:36px;text-align:right">34</span>
+      </div>
+      <div class="health-row">Kafka Lag
+        <div>
+          <div class="health-bar-wrap">
+            <div class="health-bar" id="bar-lag" style="width:12%"></div>
+          </div>
+        </div>
+        <span id="lbl-lag" style="font-size:0.8rem;width:36px;text-align:right">60</span>
+      </div>
+      <div class="health-row">Dropped Frames
+        <div>
+          <div class="health-bar-wrap">
+            <div class="health-bar" id="bar-drop" style="width:2%"></div>
+          </div>
+        </div>
+        <span id="lbl-drop" style="font-size:0.8rem;width:36px;text-align:right">0.2%</span>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    // ── Simulated real-time data (replace with WebSocket in production) ─────────
+
+    const WS_URL = "ws://localhost:8000/ws/dashboard";
+    let ws, lastUpdateTime = new Date().toLocaleTimeString();
+
+    // ── Chart.js Setup ──────────────────────────────────────────────────────────
+
+    const chartDefaults = {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      animation: { duration: 300 },
+      scales: {
+        x: { ticks: { color: "#64748b", font: { size: 10 } }, grid: { color: "#1e293b" } },
+        y: { ticks: { color: "#64748b", font: { size: 10 } }, grid: { color: "#1e293b" } }
+      }
+    };
+
+    const labels = Array.from({ length: 20 }, (_, i) => `${i * 3}s`);
+    const confData = Array.from({ length: 20 }, () => 0.78 + Math.random() * 0.1);
+    const latData = Array.from({ length: 20 }, () => 45 + Math.random() * 30);
+
+    const confChart = new Chart(document.getElementById("confChart"), {
+      type: "line",
+      data: {
+        labels,
+        datasets: [{
+          data: confData, borderColor: "#6366f1", backgroundColor: "#6366f118",
+          fill: true, tension: 0.4, pointRadius: 0, borderWidth: 2
+        }]
+      },
+      options: {
+        ...chartDefaults, scales: {
+          ...chartDefaults.scales,
+          y: { ...chartDefaults.scales.y, min: 0.5, max: 1.0 }
+        }
+      }
+    });
+
+    const latChart = new Chart(document.getElementById("latChart"), {
+      type: "line",
+      data: {
+        labels,
+        datasets: [{
+          data: latData, borderColor: "#22d3ee", backgroundColor: "#22d3ee18",
+          fill: true, tension: 0.4, pointRadius: 0, borderWidth: 2
+        }]
+      },
+      options: {
+        ...chartDefaults, scales: {
+          ...chartDefaults.scales,
+          y: {
+            ...chartDefaults.scales.y, min: 0, max: 250,
+            afterDataLimits: () => { },
+          }
+        }
+      }
+    });
+
+    // ── Synthetic camera canvas renderer ───────────────────────────────────────
+
+    function drawCamera(canvasId, personCount) {
+      const c = document.getElementById(canvasId);
+      if (!c) return;
+      const ctx = c.getContext("2d");
+      c.width = 320; c.height = 180;
+      ctx.fillStyle = "#0d1117";
+      ctx.fillRect(0, 0, 320, 180);
+      // Draw floor grid
+      ctx.strokeStyle = "#1e293b"; ctx.lineWidth = 0.5;
+      for (let x = 0; x < 320; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x + 40, 180); ctx.stroke(); }
+      // Draw synthetic person silhouettes
+      for (let i = 0; i < personCount; i++) {
+        const px = 30 + Math.random() * 260, py = 40 + Math.random() * 120;
+        ctx.fillStyle = "#334155";
+        ctx.fillRect(px - 10, py - 25, 20, 35);
+        ctx.beginPath(); ctx.arc(px, py - 32, 10, 0, Math.PI * 2);
+        ctx.fill();
+        // Bounding box
+        ctx.strokeStyle = "#6366f1"; ctx.lineWidth = 1.5;
+        ctx.strokeRect(px - 14, py - 44, 28, 56);
+        // Confidence label
+        ctx.fillStyle = "#6366f1"; ctx.fillRect(px - 14, py - 44, 28, 12);
+        ctx.fillStyle = "#fff"; ctx.font = "8px monospace";
+        ctx.fillText((0.82 + Math.random() * 0.15).toFixed(2), px - 12, py - 35);
+      }
+    }
+
+    // ── Alert feed ──────────────────────────────────────────────────────────────
+
+    const ALERTS = [
+      { title: "VIP Customer Detected", msg: "Raj Mehta at entrance — 12th visit", sev: "medium" },
+      { title: "Unknown at Billing", msg: "Track #0047 unresolved — confidence 0.41", sev: "high" },
+      { title: "Re-ID Match Rate Drop", msg: "cam_tracking_01 fell to 62% — check lighting", sev: "high" },
+      { title: "Regular Customer", msg: "Priya Sharma identified — avg spend ₹2,400", sev: "" },
+      { title: "Vehicle Detected", msg: "MH12AB1234 → linked to Ravi Kumar profile", sev: "" },
+      { title: "GPU Utilization High", msg: "72% sustained for 10min — monitor closely", sev: "medium" },
+    ];
+
+    function addAlert(alert) {
+      const feed = document.getElementById("alert-feed");
+      const div = document.createElement("div");
+      div.className = `alert-item ${alert.sev}`;
+      div.innerHTML = `<div class="alert-title">${alert.title}</div>
+    <div>${alert.msg}</div>
+    <div class="alert-time">${new Date().toLocaleTimeString()}</div>`;
+      feed.prepend(div);
+      if (feed.children.length > 20) feed.lastChild.remove();
+    }
+
+    // ── Main update loop (simulated) ────────────────────────────────────────────
+
+    let tick = 0;
+    function update() {
+      tick++;
+      lastUpdateTime = new Date().toLocaleTimeString();
+
+      // Update charts
+      confData.push(0.72 + Math.random() * 0.15); confData.shift();
+      latData.push(35 + Math.random() * 60); latData.shift();
+      confChart.update("none"); latChart.update("none");
+
+      // Update cameras
+      [0, 1, 2, 3, 4].forEach(i => drawCamera(`cv${i}`, Math.floor(1 + Math.random() * 4)));
+
+      // Update stats
+      const gpu = Math.floor(55 + Math.random() * 30);
+      const queue = Math.floor(10 + Math.random() * 80);
+      document.getElementById("hdr-gpu").textContent = gpu + "%";
+      document.getElementById("hdr-queue").textContent = queue;
+      document.getElementById("stat-active").textContent = Math.floor(12 + Math.random() * 10);
+
+      // Update health bars
+      const setBar = (id, lblId, val, max, unit = "") => {
+        const pct = Math.min(100, (val / max) * 100);
+        const bar = document.getElementById(id);
+        bar.style.width = pct + "%";
+        bar.className = `health-bar ${pct > 85 ? "danger" : pct > 65 ? "warn" : ""}`;
+        document.getElementById(lblId).textContent = val + unit;
+      };
+      setBar("bar-gpu", "lbl-gpu", gpu, 100, "%");
+      setBar("bar-vram", "lbl-vram", 3.1, 10, "G");
+      setBar("bar-queue", "lbl-queue", queue, 100);
+      setBar("bar-lag", "lbl-lag", Math.floor(30 + Math.random() * 200), 1000);
+      setBar("bar-drop", "lbl-drop", 0.2, 10, "%");
+
+      // Random alert
+      if (tick % 8 === 0) addAlert(ALERTS[Math.floor(Math.random() * ALERTS.length)]);
+    }
+
+    // ── WebSocket connection (production) ───────────────────────────────────────
+
+    function connectWS() {
+      try {
+        ws = new WebSocket(WS_URL);
+        ws.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          // Handle real data from API gateway WebSocket
+          // data.type: "metrics" | "alert" | "identity"
+          if (data.type === "alert") addAlert(data.payload);
+        };
+        ws.onclose = () => {
+          document.getElementById("last-ts").textContent = lastUpdateTime;
+          document.getElementById("degradation-banner").classList.add("show");
+          setTimeout(connectWS, 3000);
+        };
+        ws.onopen = () => {
+          document.getElementById("degradation-banner").classList.remove("show");
+        };
+      } catch (e) {
+        // WebSocket not available (dev mode) — use simulation only
+      }
+    }
+
+    // Start everything
+    ALERTS.slice(0, 3).forEach(addAlert);
+    update();
+    setInterval(update, 2000);
+    connectWS();
+  </script>
+</body>
+
+</html>

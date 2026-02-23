@@ -1,0 +1,93 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: staging
+        type: choice
+        options: [staging, production]
+
+jobs:
+  deploy-staging:
+    runs-on: ubuntu-latest
+    environment: staging
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to staging via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            cd /opt/trinetra
+            git pull origin main
+            docker compose pull
+            docker compose up -d --remove-orphans
+            echo "Waiting 60s for services to start..."
+            sleep 60
+
+      - name: Smoke test — health checks
+        run: |
+          curl -sf http://${{ secrets.STAGING_HOST }}:8000/health || exit 1
+          curl -sf http://${{ secrets.STAGING_HOST }}:8002/health || exit 1
+          curl -sf http://${{ secrets.STAGING_HOST }}:8003/health || exit 1
+
+      - name: Smoke test — detection latency
+        run: |
+          P99=$(curl -s http://${{ secrets.STAGING_HOST }}:9090/api/v1/query \
+            --data-urlencode 'query=histogram_quantile(0.99, rate(trinetra_detection_latency_seconds_bucket[1m]))' \
+            | python3 -c "import sys,json; print(float(json.load(sys.stdin)['data']['result'][0]['value'][1]))")
+          echo "P99 detection latency: ${P99}s"
+          python3 -c "assert float('$P99') < 0.2, 'P99 > 200ms SLA violated'"
+
+  deploy-production:
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://trinetra.yourdomain.com
+    needs: deploy-staging
+    if: github.event.inputs.environment == 'production'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Canary rollout (10% traffic)
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          script: |
+            cd /opt/trinetra
+            # Scale canary replica: 1 new + 9 old
+            docker service update --image ghcr.io/${{ github.repository_owner }}/trinetra-inference-worker:${{ github.sha }} \
+              --update-parallelism 1 \
+              --update-delay 30s \
+              --rollback-on-failure \
+              trinetra_inference-worker
+
+      - name: Monitor canary (5 minutes)
+        run: |
+          sleep 300
+          ERROR_RATE=$(curl -s http://${{ secrets.PROD_HOST }}:9090/api/v1/query \
+            --data-urlencode 'query=rate(trinetra_kafka_publish_errors_total[5m])' \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['result'][0]['value'][1])")
+          python3 -c "assert float('$ERROR_RATE') < 0.01, 'Canary error rate > 1%'"
+
+      - name: Full production rollout
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          script: |
+            cd /opt/trinetra
+            docker compose pull
+            docker compose up -d --remove-orphans
